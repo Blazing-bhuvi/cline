@@ -150,13 +150,54 @@ class VerificationWorkflow:
           * REJECT  -> flag REJECTED (first reviewer's rejection upheld).
         """
         flag = self._get_flag_locked(flag_id)
-        decision_enum = (decision if isinstance(decision, BLOReviewDecision)
-                         else BLOReviewDecision(str(decision).upper()))
+        current_state = self._as_state(flag.state)
 
         # --- Validations (Phase 3) ------------------------------------- #
+        # 1. Invalid decision string -> clean WorkflowError (not a raw
+        #    ValueError that would surface as an HTTP 500).
+        try:
+            decision_enum = (decision if isinstance(decision, BLOReviewDecision)
+                             else BLOReviewDecision(str(decision).upper()))
+        except (ValueError, KeyError) as exc:
+            raise WorkflowError(f"Invalid review decision: {decision!r}") from exc
+
+        # 2. Terminal-state guard: a CONFIRMED/REJECTED flag is closed and
+        #    cannot be reviewed again (prevents re-review / double-count).
+        if current_state in (FlagState.CONFIRMED, FlagState.REJECTED):
+            raise WorkflowError(
+                f"Flag {flag_id} is already {current_state.value} and cannot be "
+                f"reviewed again")
+
+        # 3. State-machine guard: a review requires the flag to be in
+        #    BLO_REVIEW. A flag sitting at FLAGGED was never routed/started;
+        #    auto-advance a legitimately ASSIGNED flag to BLO_REVIEW, but never
+        #    allow a FLAGGED (unrouted) flag to be reviewed.
+        if current_state == FlagState.ASSIGNED:
+            # Only the assigned BLO may open the review (ASSIGNED -> BLO_REVIEW).
+            if flag.assigned_blo_id != reviewer_id:
+                raise WorkflowError(
+                    f"Reviewer {reviewer_id} is not assigned to flag {flag_id}")
+            self._transition(flag, FlagState.BLO_REVIEW)
+            flag.state = FlagState.BLO_REVIEW.value
+            self.session.flush()
+            current_state = FlagState.BLO_REVIEW
+        elif current_state != FlagState.BLO_REVIEW:
+            raise WorkflowError(
+                f"Flag {flag_id} must be routed and in review before a decision "
+                f"(current state {current_state.value})")
+
         if review_round == 1 and flag.assigned_blo_id != reviewer_id:
             raise WorkflowError(
                 f"Reviewer {reviewer_id} is not assigned to flag {flag_id}")
+
+        # 4. Blind double-review independence: the second reviewer MUST be a
+        #    different person from the first BLO who rejected the flag.
+        if review_round == 2:
+            first_reviewer = self._first_rejecter(flag_id)
+            if first_reviewer is not None and first_reviewer == reviewer_id:
+                raise WorkflowError(
+                    "Second reviewer must be independent of the first reviewer "
+                    f"({reviewer_id})")
         # Idempotency: no duplicate review for the same (flag, reviewer, round).
         existing = (self.session.query(BLOReviewSubmission)
                     .filter(BLOReviewSubmission.flag_id == flag_id,

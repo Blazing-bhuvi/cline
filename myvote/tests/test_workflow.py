@@ -140,3 +140,93 @@ def test_audit_log_records_every_transition(seeded):
     assert ok, errors
     actions = {e.action for e in AuditChain(session).entries()}
     assert "FLAG_ASSIGNED" in actions
+
+
+# --------------------------------------------------------------------------- #
+#  Phase 3 hardening tests (one per fix)
+# --------------------------------------------------------------------------- #
+def test_terminal_confirmed_flag_cannot_be_reviewed_again(session):
+    # Gap: a CONFIRMED flag could be reviewed again. Fix: terminal-state guard.
+    flag = _make_high_flag(session, tier=ConfidenceTier.LOW.value,
+                           state=FlagState.BLO_REVIEW.value)
+    wf = VerificationWorkflow(session)
+    wf.submit_review(flag.id, "BLO-1", "CONFIRM", review_round=1)
+    session.commit()
+    assert str(flag.state) == FlagState.CONFIRMED.value
+    with pytest.raises(WorkflowError):
+        wf.submit_review(flag.id, "BLO-1", "REJECT", review_round=1)
+
+
+def test_terminal_rejected_flag_cannot_be_reviewed_again(session):
+    flag = _make_high_flag(session, tier=ConfidenceTier.LOW.value,
+                           state=FlagState.BLO_REVIEW.value)
+    wf = VerificationWorkflow(session)
+    wf.submit_review(flag.id, "BLO-1", "REJECT", review_round=1)
+    session.commit()
+    assert str(flag.state) == FlagState.REJECTED.value
+    with pytest.raises(WorkflowError):
+        wf.submit_review(flag.id, "BLO-1", "CONFIRM", review_round=1)
+
+
+def test_flagged_unrouted_flag_cannot_be_reviewed(session):
+    # Gap: a FLAGGED (never routed) flag could jump straight to a decision.
+    # Fix: must be ASSIGNED/BLO_REVIEW first.
+    flag = _make_high_flag(session, state=FlagState.FLAGGED.value)
+    wf = VerificationWorkflow(session)
+    with pytest.raises(WorkflowError):
+        wf.submit_review(flag.id, "BLO-1", "CONFIRM", review_round=1)
+
+
+def test_assigned_flag_auto_advances_to_review(session):
+    # A legitimately ASSIGNED flag reviewed by its own BLO auto-advances
+    # ASSIGNED -> BLO_REVIEW -> CONFIRMED.
+    flag = _make_high_flag(session, tier=ConfidenceTier.LOW.value,
+                           state=FlagState.ASSIGNED.value)
+    wf = VerificationWorkflow(session)
+    res = wf.submit_review(flag.id, "BLO-1", "CONFIRM", review_round=1)
+    session.commit()
+    assert str(res.flag.state) == FlagState.CONFIRMED.value
+
+
+def test_assigned_flag_wrong_blo_cannot_open_review(session):
+    flag = _make_high_flag(session, state=FlagState.ASSIGNED.value)
+    wf = VerificationWorkflow(session)
+    with pytest.raises(WorkflowError):
+        wf.submit_review(flag.id, "WRONG-BLO", "CONFIRM", review_round=1)
+
+
+def test_second_reviewer_must_differ_from_first(session):
+    # Gap: the second reviewer could be the same person as the first BLO,
+    # defeating the "independent" double-review. Fix: reject.
+    flag = _make_high_flag(session, tier=ConfidenceTier.HIGH.value,
+                           state=FlagState.BLO_REVIEW.value)
+    wf = VerificationWorkflow(session)
+    wf.submit_review(flag.id, "BLO-1", "REJECT", review_round=1)
+    session.commit()
+    with pytest.raises(WorkflowError):
+        wf.submit_review(flag.id, "BLO-1", "CONFIRM", review_round=2)
+
+
+def test_invalid_decision_raises_workflow_error_not_valueerror(session):
+    # Gap: an invalid decision string raised a raw ValueError (-> HTTP 500).
+    # Fix: a clean WorkflowError (-> HTTP 400).
+    flag = _make_high_flag(session, tier=ConfidenceTier.LOW.value,
+                           state=FlagState.BLO_REVIEW.value)
+    wf = VerificationWorkflow(session)
+    with pytest.raises(WorkflowError):
+        wf.submit_review(flag.id, "BLO-1", "MAYBE", review_round=1)
+
+
+def test_concurrent_double_confirm_only_one_wins(session):
+    # Race guard: two independent workflow instances reviewing the same flag;
+    # the second must be rejected by the terminal-state / idempotency guard.
+    flag = _make_high_flag(session, tier=ConfidenceTier.LOW.value,
+                           state=FlagState.BLO_REVIEW.value)
+    wf1 = VerificationWorkflow(session)
+    wf2 = VerificationWorkflow(session)
+    r1 = wf1.submit_review(flag.id, "BLO-1", "CONFIRM", review_round=1)
+    session.commit()
+    assert str(r1.flag.state) == FlagState.CONFIRMED.value
+    with pytest.raises(WorkflowError):
+        wf2.submit_review(flag.id, "BLO-1", "REJECT", review_round=1)
+
