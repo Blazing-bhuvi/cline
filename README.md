@@ -193,3 +193,41 @@ cd backend
 - Unit tests use mocks / deterministic inputs (fast).
 - `@pytest.mark.integration` tests run the **real** OCR / QR pipeline against a
   generated specimen card.
+
+---
+
+## 10. MyVote-D subsystem (electoral-roll discrepancy detection)
+
+This repo also contains **MyVote-D**, a self-contained decision-support
+subsystem that flags electoral-roll anomalies (duplicates, transliteration
+variants, underage voters, abusive Form 7 deletions) and routes them to a
+**Booth Level Officer (BLO)** for physical verification. It **never** deletes a
+voter record, uses **100% synthetic data**, **masks PII** on public views, and
+writes every state change to a **SHA-256 hash-chained audit log**.
+
+It lives entirely under [`myvote/`](myvote/) with its own requirements, tests,
+and SQLite database — it does **not** modify the voter-verification backend and
+shares no tables with it. See [`myvote/README.md`](myvote/README.md).
+
+### Run MyVote-D standalone
+```powershell
+pip install -r myvote\requirements.txt
+uvicorn myvote.main:app --host 127.0.0.1 --port 8001
+# dashboard: http://127.0.0.1:8001/myvote/
+```
+
+### Run MyVote-D tests
+```powershell
+python -m pytest myvote\tests -q
+```
+
+### (Optional) expose MyVote-D inside the existing backend
+Add to `backend/app/main.py` — fully optional, guarded so upstream never breaks:
+```python
+try:
+    from myvote.api import mount as mount_myvote
+    mount_myvote(app)   # adds /myvote/api/* and the /myvote/ dashboard
+except Exception:
+    pass
+```
+

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ app_name }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen">
+  <header class="bg-indigo-700 text-white shadow">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <h1 class="text-xl font-bold">{{ app_name }}</h1>
+      <span class="text-xs bg-indigo-500 px-2 py-1 rounded">SYNTHETIC DATA · NO AUTO-DELETE · DPDP-MASKED</span>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-6 py-6 space-y-6">
+
+    <!-- System status -->
+    <section class="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-xs uppercase text-slate-500">Electors</div>
+        <div class="text-2xl font-semibold">{{ status.elector_count }}</div>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-xs uppercase text-slate-500">Total Flags</div>
+        <div class="text-2xl font-semibold">{{ status.flag_count }}</div>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-xs uppercase text-slate-500">Open</div>
+        <div class="text-2xl font-semibold text-amber-600">{{ status.open_flags }}</div>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-xs uppercase text-slate-500">HIGH confidence</div>
+        <div class="text-2xl font-semibold text-red-600">{{ status.high_flags }}</div>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4">
+        <div class="text-xs uppercase text-slate-500">Audit Chain</div>
+        {% if status.audit_ok %}
+          <div class="text-sm font-semibold text-green-600">✓ INTACT ({{ status.audit_entries }} entries)</div>
+        {% else %}
+          <div class="text-sm font-semibold text-red-600">✗ BROKEN</div>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if not status.audit_ok %}
+    <section class="bg-red-50 border border-red-200 text-red-800 rounded-lg p-4">
+      <strong>Audit chain integrity errors:</strong>
+      <ul class="list-disc ml-5">
+        {% for e in status.audit_errors %}<li>{{ e }}</li>{% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    <!-- Flags table (PII-masked) -->
+    <section class="bg-white rounded-lg shadow overflow-hidden">
+      <div class="px-6 py-3 border-b border-slate-200 flex items-center justify-between">
+        <h2 class="font-semibold">Active Discrepancy Flags</h2>
+        <span class="text-xs text-slate-500">PII masked per DPDP</span>
+      </div>
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600">
+          <tr>
+            <th class="text-left px-4 py-2">#</th>
+            <th class="text-left px-4 py-2">Category</th>
+            <th class="text-left px-4 py-2">Tier</th>
+            <th class="text-left px-4 py-2">State</th>
+            <th class="text-left px-4 py-2">Subject (masked)</th>
+            <th class="text-left px-4 py-2">Conf.</th>
+            <th class="text-left px-4 py-2">FIR</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for r in rows %}
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-2">{{ r.id }}</td>
+            <td class="px-4 py-2">{{ r.category }}</td>
+            <td class="px-4 py-2">
+              {% if r.tier == 'HIGH' %}<span class="text-red-600 font-semibold">HIGH</span>
+              {% elif r.tier == 'MEDIUM' %}<span class="text-amber-600 font-semibold">MEDIUM</span>
+              {% else %}<span class="text-slate-500">LOW</span>{% endif %}
+            </td>
+            <td class="px-4 py-2">{{ r.state }}</td>
+            <td class="px-4 py-2 font-mono text-xs">{{ r.subject.epic_id }} · {{ r.subject.name }} · {{ r.subject.age_band }}</td>
+            <td class="px-4 py-2">{{ '%.0f' % (r.confidence * 100) }}%</td>
+            <td class="px-4 py-2">{% if r.fir_triggered %}<span class="text-red-700 font-bold">FIR</span>{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+          {% if not rows %}
+          <tr><td colspan="7" class="px-4 py-6 text-center text-slate-400">No flags yet. Run a detection pass via <code>POST /myvote/api/detect</code>.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </section>
+
+    <footer class="text-xs text-slate-400 pt-4">
+      This is a decision-support prototype on 100% synthetic data. It flags anomalies and routes
+      them to a Booth Level Officer for physical verification. It never deletes a voter record.
+    </footer>
+  </main>
+</body>
+</html>

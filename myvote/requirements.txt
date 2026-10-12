@@ -1,0 +1,13 @@
+# MyVote-D isolated requirements (do NOT merge into backend/requirements.txt;
+# upstream pins stay untouched). These are ADDITIONAL to the shared FastAPI /
+# SQLAlchemy / Pydantic stack already used by the backend.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+SQLAlchemy>=2.0
+pydantic>=2.7
+PyYAML>=6.0
+pyotp>=2.9
+Jinja2>=3.1
+reportlab>=4.0
+pytest>=8.0
+httpx>=0.27

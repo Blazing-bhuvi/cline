@@ -1,0 +1,175 @@
+# ============================================================================
+#  Electoral Roll Discrepancy Detection & BLO Verification System
+#  Legal & Technical Thresholds
+#
+#  NOTE: All values below are PROTOTYPE thresholds used for a decision-support
+#  demonstration on 100% SYNTHETIC data. They are NOT authoritative legal advice.
+#  References to the Representation of the People Act, 1950 and the DPDP Act,
+#  2023 are for contextual labelling only.
+# ============================================================================
+
+app:
+  name: "Electoral Roll Discrepancy Detection & BLO Verification System"
+  version: "0.1.0"
+  environment: "hackathon-prototype"
+
+# --- Data governance (HARD CONSTRAINTS) -----------------------------------
+data_governance:
+  synthetic_only: true          # NEVER load real voter data
+  auto_delete_enabled: false    # System must NEVER auto-delete a voter
+  # Allowed actions the system may take on a record:
+  allowed_actions:
+    - FLAG
+    - ASSIGN_TO_BLO
+    - GENERATE_ERO_NOTICE
+
+# --- Database -------------------------------------------------------------
+database:
+  url: "sqlite:///./data/electoral.db"
+  echo: false
+
+# --- PII masking (DPDP Act, 2023 inspired) --------------------------------
+pii_masking:
+  enabled: true
+  # Applies to any PUBLIC-FACING dashboard / export.
+  # Internal BLO review view shows data only after TOTP auth.
+  mask_epic_id: true            # e.g. ABC1234567 -> AB******67
+  mask_name: true               # e.g. Rajesh Kumar -> R***** K****
+  mask_dob: true                # reveal only age band, not full DOB
+  mask_address: true            # reveal only house-number + locality code
+  reveal_last_n_digits: 2       # digits left visible on masked EPIC
+  min_mask_length: 4
+
+# --- Authentication & session (Security) ----------------------------------
+auth:
+  totp:
+    issuer: "BLO-Verification"
+    digits: 6
+    interval_seconds: 30
+  session:
+    absolute_timeout_minutes: 15   # HARD cap on total session length
+    idle_timeout_minutes: 5        # cap on inactivity
+    cookie_name: "blo_session"
+
+# ============================================================================
+#  DETECTION THRESHOLDS
+# ============================================================================
+detection:
+
+  # --- Underage detection -------------------------------------------------
+  # Art. 326 of the Constitution of India + Sec. 16 RP Act 1950: minimum age
+  # for enrolment is 18 years on the qualifying date (1st January).
+  underage:
+    minimum_age: 18
+    qualifying_date: "01-01"      # MM-DD
+
+  # --- Demographic Similarity Detection (DSD) -----------------------------
+  # Weighted composite of demographic similarity signals in [0.0, 1.0].
+  dsd:
+    weights:
+      name: 0.45
+      age: 0.25
+      relative_name: 0.20
+      address: 0.10
+    # Minimum component score to count a signal at all
+    min_component_score: 0.0
+    # Known transliteration / alias variant clusters for Indian names.
+    # Names within the SAME cluster get a similarity boost, NOT an
+    # automatic duplicate verdict (guards against false positives).
+    transliteration_clusters:
+      - ["kumar", "coomar", "kumaru", "kumara"]
+      - ["mohammad", "mohamed", "mohammed", "muhammad"]
+      - ["vishnu", "bishnu", "vishnoo"]
+      - ["krishna", "krisna", "krishan"]
+      - ["sita", "seeta", "sitta"]
+      - ["ram", "raam", "raama"]
+
+  # --- Photo Similarity Detection (PSD) -----------------------------------
+  # Mock cosine similarity on 128-d face embeddings (synthetic vectors).
+  psd:
+    vector_dimension: 128
+    # Cosine similarity in [0,1]; >1 or <-1 clamped.
+    duplicate_threshold: 0.92    # >= this => photos considered the same person
+    possible_threshold: 0.80     # >= this => worth a manual look
+
+  # --- Confidence tiers (composite of DSD + PSD) --------------------------
+  # A flag's final confidence = weighted blend of the demographic score and
+  # the photo similarity. Tier determines routing/escalation behaviour.
+  confidence:
+    blend_weights:
+      dsd: 0.6
+      psd: 0.4
+    tiers:
+      low: 0.0        # [0.0, 0.5)  -> informational only
+      medium: 0.5     # [0.5, 0.75) -> standard BLO review
+      high: 0.75      # [0.75, 1.0] -> priority + double-review escalation
+
+# --- Audit trail (Append-only, hash-chained) ------------------------------
+audit:
+  algorithm: "sha256"
+  genesis_hash: "0000000000000000000000000000000000000000000000000000000000000000"  # 64 hex zeros; "previous" hash for entry #1
+
+# ============================================================================
+#  FORM 7 / FORM 8 ABUSE RULES  (Representation of the People Act, 1950)
+# ============================================================================
+# Form 7 = application for deletion of an entry from the electoral roll.
+# Form 8 = application for correction / objection to a particular entry.
+form_rules:
+  form7:
+    # Sec. 18 RP Act 1950 governs supervision of electoral rolls; Form 7
+    # deletions must be verified. We CAP bulk deletions attributed to a single
+    # objector to detect an abuse / mass-objection pattern.
+    max_deletions_per_objector_per_day: 5
+    # Window (days) over which the per-objector cap is measured
+    window_days: 1
+    # If a single objector exceeds the cap -> raise a "bulk abuse" anomaly.
+    bulk_abuse_threshold: 5
+  form8:
+    max_corrections_per_objector_per_day: 10
+    window_days: 1
+
+# ============================================================================
+#  WORKFLOW / ESCALATION
+# ============================================================================
+workflow:
+  states:
+    - FLAGGED
+    - ASSIGNED
+    - BLO_REVIEW
+    - CONFIRMED
+    - REJECTED
+  # Blind double-review: a rejection of a HIGH-confidence flag by the first
+  # BLO is escalated to a second, independent reviewer.
+  double_review:
+    enabled: true
+    # Only these tiers are subject to double review on rejection
+    escalate_on_reject_tiers:
+      - HIGH
+  # If the second reviewer overturns the first reviewer's rejection
+  # (i.e. upholds the flag), a Negligence Review Dossier is produced for ERO.
+  negligence_dossier:
+    generate_on_overturn: true
+    formats:
+      - json
+      - pdf
+
+
+# ============================================================================
+#  MOCK ERONET SEED CONFIG  (synthetic data generator)
+# ============================================================================
+# MockERONET seeds ONLY synthetic data. Tune the population size / edge-case
+# counts here. All names, EPICs, DOBs and face vectors are fabricated.
+mock_eronet:
+  seed: 42                       # RNG seed for reproducibility
+  population: 60                 # baseline "clean" electors
+  true_duplicate_pairs: 3        # same person across constituencies (real dup)
+  transliteration_pairs: 3       # Kumar/Coomar style variants of one person
+  common_name_fp_traps: 4        # distinct people sharing a very common name
+  underage_count: 4              # voters under 18 at enrolment
+  form7_bulk_objector_count: 1   # number of abusive objectors
+  form7_bulk_targets: 8          # Form 7 deletions by that one objector (> cap)
+  fake_deletion_pairs: 2         # suspicious Form 7 against a young/real voter
+  # Synthetic name pools used by the generator (fabricated).
+  first_names: [Aarav, Vivaan, Diya, Ananya, Kabir, Meera, Rohan, Sanya, Ishaan, Priya]
+  last_names: [Sharma, Iyer, Nair, Reddy, Khan, Singh, Bose, Menon, Rao, Gupta]
+

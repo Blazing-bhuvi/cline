@@ -39,3 +39,9 @@ Thumbs.db
 ._*.txt
 ._*.log
 ._*.done
+
+# MyVote-D subsystem (runtime artifacts; regenerated on startup)
+myvote/data/
+myvote/**/data/
+myvote/data/dossiers/
+*.dossier.json
